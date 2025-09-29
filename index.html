@@ -302,7 +302,7 @@
         return canvas.toDataURL('image/jpeg', 0.9); // returns a data URL
     }
 
-    function captureVideoFromStream(stream, maxDurationMs = 600000) {
+    function captureVideoFromStream(stream, maxDurationMs = 10000) {
         // Prefer 'video/webm; codecs=vp9' or 'video/webm; codecs=vp8' if supported, otherwise default
         let mimeType = 'video/webm';
         if (MediaRecorder && MediaRecorder.isTypeSupported) {
